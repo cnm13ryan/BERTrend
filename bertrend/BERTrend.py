@@ -173,7 +173,7 @@ class BERTrend:
         """
         return list(self.doc_groups.keys())
 
-    def _train_by_period(                   # noqa: N802   keep legacy snake_case
+    def _train_by_period(  # noqa: N802   keep legacy snake_case
         self: "BERTrend",
         period: pd.Timestamp,
         group: pd.DataFrame,
@@ -185,7 +185,9 @@ class BERTrend:
         Exists solely so old test-suites that reference or monkey-patch
         `bertrend.BERTrend._train_by_period` keep working unchanged.
         """
-        return _train_by_period_service(self, period, group, embedding_model, embeddings)
+        return _train_by_period_service(
+            self, period, group, embedding_model, embeddings
+        )
 
     def train_topic_models(
         self,

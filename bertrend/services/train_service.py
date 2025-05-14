@@ -84,9 +84,7 @@ def train_by_period(  # pylint: disable=too-many-locals
         .reset_index(name="Document_Count")
     )
     topic_sources_df = (
-        doc_info_df.groupby("Topic")["source"]
-        .apply(list)
-        .reset_index(name="Sources")
+        doc_info_df.groupby("Topic")["source"].apply(list).reset_index(name="Sources")
     )
     topic_urls_df = (
         doc_info_df.groupby("Topic")["url"].apply(list).reset_index(name="URLs")
