@@ -271,10 +271,7 @@ class BERTopicModel:
             logger.debug("\tFitting BERTopic model")
             topics, probs = topic_model.fit_transform(docs, embeddings)
 
-            if not topic_model._outliers:
-                logger.warning("\tNo outliers to reduce.")
-                new_topics = topics
-            else:
+            if topic_model._outliers:
                 logger.debug("\tReducing outliers")
                 new_topics = topic_model.reduce_outliers(
                     documents=docs,
@@ -282,6 +279,10 @@ class BERTopicModel:
                     embeddings=embeddings,
                     strategy=self.config["reduce_outliers"]["strategy"],
                 )
+            else:
+                logger.warning("\tNo outliers to reduce.")
+                new_topics = topics
+
             logger.debug("\tUpdating topics")
             topic_model.update_topics(
                 docs=docs,
