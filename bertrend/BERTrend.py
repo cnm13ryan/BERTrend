@@ -1155,9 +1155,12 @@ def _merge_models(
 
     new_topics_mask = max_similarities < min_similarity
     new_topics_data = incoming_df[new_topics_mask].copy()
+
+    # first ID to assign to incoming, previously-unseen topics
+    next_topic_id_start = merged_df["Topic"].max() + 1
     new_topics_data["Topic"] = np.arange(
-        merged_df["Topic"].max() + 1,
-        merged_df["Topic"].max() + 1 + len(new_topics_data),
+        next_topic_id_start,
+        next_topic_id_start + len(new_topics_data),
     )
     new_topics_data["Timestamp"] = timestamp
 
