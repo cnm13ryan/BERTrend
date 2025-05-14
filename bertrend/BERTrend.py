@@ -2,7 +2,9 @@
 #  See AUTHORS.txt
 #  SPDX-License-Identifier: MPL-2.0
 #  This file is part of BERTrend.
+from __future__ import annotations
 import os
+import sys
 import pickle
 
 import dill  # improvement to pickle
@@ -74,6 +76,7 @@ class BERTrend:
         self,
         config_file: str | Path = BERTREND_DEFAULT_CONFIG_PATH,
         topic_model: BERTopicModel = None,
+        config_loader: "ConfigLoader" | None = None,
     ):
         """
         Initialize a class from a TOML config file.
@@ -93,6 +96,7 @@ class BERTrend:
         """
         # Load configuration file
         self.config_file = config_file
+        self._config_loader = config_loader
         self.config = self._load_config()
 
         # Initialize topic model
@@ -131,13 +135,22 @@ class BERTrend:
         """
         Load the TOML config file as a dict when initializing the class.
 
+        Resolution order (keeps old tests green):
+        1. explicit `config_loader` passed by caller
+        2. *current* value of `bertrend.BERTrend.load_toml_config`
+           (so monkey-patches work exactly like before)
+
         Returns
         -------
         dict
             The configuration dictionary loaded from the config file.
         """
-        config = load_toml_config(self.config_file)
-        return config
+        if self._config_loader is not None:
+            return self._config_loader(self.config_file)
+
+        # late-bind the ***module*** attribute that tests monkey-patch
+        module_loader = getattr(sys.modules[__name__], "load_toml_config")
+        return module_loader(self.config_file)
 
     def get_periods(self):
         """
