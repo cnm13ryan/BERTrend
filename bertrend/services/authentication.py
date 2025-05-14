@@ -51,8 +51,17 @@ class SecureAPIClient:
         )
 
         if response.status_code == status.HTTP_200_OK:
+            # Always log raw body—helps diagnose 4xx/5xx HTML or error JSON payloads
+            logger.debug("Auth response body: %s", response.text)
+
             token_data = response.json()
-            access_token = token_data["access_token"]
+            try:
+                access_token = token_data["access_token"]
+            except KeyError as exc:
+                raise AuthenticationError(
+                    f"Auth server response missing 'access_token': {token_data}"
+                ) from exc
+
             expires_in = token_data.get(
                 "expires_in", 3600
             )  # Default to 1 hour if expires_in is not provided
