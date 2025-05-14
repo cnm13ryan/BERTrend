@@ -49,6 +49,7 @@ from bertrend.trend_analysis.weak_signals import (
 )
 from bertrend.utils.data_loading import TEXT_COLUMN
 from bertrend.services.persistence_service import PersistenceService
+from bertrend.services.train_service import train_by_period as _train_by_period_service
 
 
 class BERTrend:
@@ -172,99 +173,19 @@ class BERTrend:
         """
         return list(self.doc_groups.keys())
 
-    def _train_by_period(
-        self,
+    def _train_by_period(                   # noqa: N802   keep legacy snake_case
+        self: "BERTrend",
         period: pd.Timestamp,
         group: pd.DataFrame,
-        embedding_model: SentenceTransformer,
+        embedding_model: SentenceTransformer | str,
         embeddings: np.ndarray,
-    ) -> tuple[
-        BERTopic,
-        list[str],
-        np.ndarray,
-    ]:
+    ) -> Tuple[BERTopic, List[str], np.ndarray]:
+        """Wrapper that forwards to `services.train_service.train_by_period`.
+
+        Exists solely so old test-suites that reference or monkey-patch
+        `bertrend.BERTrend._train_by_period` keep working unchanged.
         """
-        Train BERTopic models for a given time period from the grouped data.
-
-        Parameters
-        ----------
-        period : pd.Timestamp
-            Timestamp of the time period.
-        group : pd.DataFrame
-            Group of data associated to that timestamp.
-        embedding_model : SentenceTransformer
-            Sentence transformer model for embeddings.
-        embeddings : np.ndarray
-            Precomputed document embeddings.
-
-        Returns
-        -------
-        tuple
-            A tuple containing:
-            - BERTopic : Trained BERTopic model for this period.
-            - list[str] : Document groups for this period.
-            - np.ndarray : Document embeddings for this period.
-        """
-        docs = group[TEXT_COLUMN].tolist()
-        embeddings_subset = embeddings[group.index]
-
-        logger.debug(f"Processing period: {period}")
-        logger.debug(f"Number of documents: {len(docs)}")
-
-        logger.debug("Creating topic model...")
-        topic_model = self.topic_model.fit(
-            docs=docs,
-            embeddings=embeddings_subset,
-        ).topic_model
-
-        logger.debug("Topic model created successfully")
-
-        doc_info_df = topic_model.get_document_info(docs=docs).rename(
-            columns={"Document": "Paragraph"}
-        )
-        doc_info_df = doc_info_df.merge(
-            group[[TEXT_COLUMN, "document_id", "source", "url"]],
-            left_on="Paragraph",
-            right_on=TEXT_COLUMN,
-            how="left",
-        )
-        doc_info_df = doc_info_df.drop(columns=[TEXT_COLUMN])
-
-        topic_info_df = topic_model.get_topic_info()
-        topic_doc_count_df = (
-            doc_info_df.groupby("Topic")["document_id"]
-            .nunique()
-            .reset_index(name="Document_Count")
-        )
-        topic_sources_df = (
-            doc_info_df.groupby("Topic")["source"]
-            .apply(list)
-            .reset_index(name="Sources")
-        )
-        topic_urls_df = (
-            doc_info_df.groupby("Topic")["url"].apply(list).reset_index(name="URLs")
-        )
-
-        topic_info_df = topic_info_df.merge(topic_doc_count_df, on="Topic", how="left")
-        topic_info_df = topic_info_df.merge(topic_sources_df, on="Topic", how="left")
-        topic_info_df = topic_info_df.merge(topic_urls_df, on="Topic", how="left")
-
-        topic_info_df = topic_info_df[
-            [
-                "Topic",
-                "Count",
-                "Document_Count",
-                "Representation",
-                "Name",
-                "Representative_Docs",
-                "Sources",
-                "URLs",
-            ]
-        ]
-
-        topic_model.doc_info_df = doc_info_df
-        topic_model.topic_info_df = topic_info_df
-        return topic_model, docs, embeddings_subset
+        return _train_by_period_service(self, period, group, embedding_model, embeddings)
 
     def train_topic_models(
         self,
