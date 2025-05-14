@@ -102,12 +102,7 @@ class BERTopicModel:
             self.config = load_toml_config(BERTOPIC_DEFAULT_CONFIG_PATH)
             overrides = config
             for section, settings in overrides.items():
-                if section in config:
-                    self.config[section].update(
-                        settings
-                    )  # Update the settings in that section
-                else:
-                    self.config[section] = settings  # If section doesn't exist, add it
+                self.config.setdefault(section, {}).update(settings)
         else:
             raise TypeError(
                 f"Config must be a string, Path or dict object, got: {type(config)}"
