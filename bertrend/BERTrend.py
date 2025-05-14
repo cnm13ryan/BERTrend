@@ -1107,16 +1107,19 @@ def _preprocess_model(
 
 
 def _merge_models(
-    df1: pd.DataFrame, df2: pd.DataFrame, min_similarity: float, timestamp: pd.Timestamp
+    existing_df: pd.DataFrame,
+    incoming_df: pd.DataFrame,
+    min_similarity: float,
+    timestamp: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Merge two topic model dataframes based on topic similarity.
 
     Parameters
     ----------
-    df1 : pd.DataFrame
+    existing_df : pd.DataFrame
         First topic model dataframe (existing topics).
-    df2 : pd.DataFrame
+    incoming_df : pd.DataFrame
         Second topic model dataframe (new topics).
     min_similarity : float
         Minimum cosine similarity threshold for merging topics.
@@ -1140,18 +1143,18 @@ def _merge_models(
     topics that exceed the minimum similarity threshold. Topics that don't meet the
     threshold are added as new topics.
     """
-    merged_df = df1.copy()
+    merged_df = existing_df.copy()
     merge_history = []
 
-    embeddings1 = np.stack(df1["Embedding"].values)
-    embeddings2 = np.stack(df2["Embedding"].values)
+    embeddings1 = np.stack(existing_df["Embedding"].values)
+    embeddings2 = np.stack(incoming_df["Embedding"].values)
 
     similarities = cosine_similarity(embeddings1, embeddings2)
     max_similarities = np.max(similarities, axis=0)
-    max_similar_topics = df1["Topic"].values[np.argmax(similarities, axis=0)]
+    max_similar_topics = existing_df["Topic"].values[np.argmax(similarities, axis=0)]
 
     new_topics_mask = max_similarities < min_similarity
-    new_topics_data = df2[new_topics_mask].copy()
+    new_topics_data = incoming_df[new_topics_mask].copy()
     new_topics_data["Topic"] = np.arange(
         merged_df["Topic"].max() + 1,
         merged_df["Topic"].max() + 1 + len(new_topics_data),
@@ -1162,12 +1165,12 @@ def _merge_models(
     new_topics = new_topics_data.copy()
 
     merge_topics_mask = max_similarities >= min_similarity
-    merge_topics_data = df2[merge_topics_mask]
+    merge_topics_data = incoming_df[merge_topics_mask]
 
     for max_similar_topic, group in merge_topics_data.groupby(
         max_similar_topics[merge_topics_mask]
     ):
-        similar_row = df1[df1["Topic"] == max_similar_topic].iloc[0]
+        similar_row = existing_df[existing_df["Topic"] == max_similar_topic].iloc[0]
         index = merged_df[merged_df["Topic"] == max_similar_topic].index[0]
 
         merged_df.at[index, "Count"] += group["Count"].sum()
