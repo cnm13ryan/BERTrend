@@ -100,8 +100,8 @@ class BERTopicModel:
         elif isinstance(config, dict):
             # load default config
             self.config = load_toml_config(BERTOPIC_DEFAULT_CONFIG_PATH)
-            # overrides keys with provided dict
-            for section, settings in config.items():
+            overrides = config
+            for section, settings in overrides.items():
                 if section in config:
                     self.config[section].update(
                         settings
