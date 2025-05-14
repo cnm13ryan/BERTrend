@@ -7,6 +7,9 @@ from loguru import logger
 
 BERTREND_FILE = "bertrend.dill"
 
+# NOTE: re-export the save/restore helpers to avoid breaking tests
+__all__ = ["PersistenceService", "save_bertrend", "load_bertrend"]
+
 
 class PersistenceService:
     """Isolate (de)serialisation concerns from domain logic."""
@@ -30,3 +33,7 @@ class PersistenceService:
             obj: BERTrend = dill.load(fh)
         logger.info("BERTrend restored from %s", path)
         return obj
+
+# preserve original import path used by tests
+save_bertrend  = PersistenceService.save_bertrend
+load_bertrend  = PersistenceService.load_bertrend
