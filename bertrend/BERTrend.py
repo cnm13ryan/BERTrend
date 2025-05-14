@@ -77,6 +77,7 @@ class BERTrend:
         config_file: str | Path = BERTREND_DEFAULT_CONFIG_PATH,
         topic_model: BERTopicModel = None,
         config_loader: "ConfigLoader" | None = None,
+        persistence_service: "PersistenceService" | None = None,
     ):
         """
         Initialize a class from a TOML config file.
@@ -101,6 +102,9 @@ class BERTrend:
 
         # Initialize topic model
         self.topic_model = BERTopicModel() if topic_model is None else topic_model
+       
+        # Dependencies
+        self._persistence = persistence_service or PersistenceService()
 
         # State variables of BERTrend
         self._is_fitted = False
@@ -130,6 +134,11 @@ class BERTrend:
         self.topic_last_popularity: dict[int, float] = {}
         # - topic_last_update: Dictionary storing the last update timestamp of each topic.
         self.topic_last_update: dict[int, pd.Timestamp] = {}
+
+    # --- DI helper (keeps old code unmodified) -------------------------
+    def set_persistence_service(self, svc: "PersistenceService") -> None:
+        """Swap backend in tests without touching constructor."""
+        self._persistence = svc
 
     def _load_config(self) -> dict:
         """
