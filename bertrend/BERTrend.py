@@ -102,7 +102,7 @@ class BERTrend:
 
         # Initialize topic model
         self.topic_model = BERTopicModel() if topic_model is None else topic_model
-       
+
         # Dependencies
         self._persistence = persistence_service or PersistenceService()
 

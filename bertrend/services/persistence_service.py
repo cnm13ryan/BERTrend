@@ -34,6 +34,7 @@ class PersistenceService:
         logger.info("BERTrend restored from %s", path)
         return obj
 
+
 # preserve original import path used by tests
-save_bertrend  = PersistenceService.save_bertrend
-load_bertrend  = PersistenceService.load_bertrend
+save_bertrend = PersistenceService.save_bertrend
+load_bertrend = PersistenceService.load_bertrend
