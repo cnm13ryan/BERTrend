@@ -46,6 +46,7 @@ from bertrend.trend_analysis.weak_signals import (
     _create_dataframes,
 )
 from bertrend.utils.data_loading import TEXT_COLUMN
+from bertrend.services.persistence_service import PersistenceService
 
 
 class BERTrend:
@@ -734,11 +735,7 @@ class BERTrend:
         -----
         This method serializes the entire BERTrend object using dill and saves it to the specified path.
         """
-        models_path.mkdir(parents=True, exist_ok=True)
-        # Serialize BERTrend object (using dill as an improvement of pickle for complex objects)
-        with open(models_path / BERTREND_FILE, "wb") as f:
-            dill.dump(self, f)
-        logger.info(f"BERTrend model saved to: {models_path}")
+        PersistenceService.save_bertrend(self, models_path)
 
     @classmethod
     def restore_model(cls, models_path: Path = MODELS_DIR) -> "BERTrend":
@@ -764,13 +761,7 @@ class BERTrend:
         -----
         This method deserializes a BERTrend object using dill from the specified path.
         """
-        if not models_path.exists():
-            raise FileNotFoundError(f"models_path={models_path} does not exist")
-        logger.info(f"Loading BERTrend model from: {models_path}")
-        # Unserialize BERTrend object (using dill as an improvement of pickle for complex objects)
-        with open(models_path / BERTREND_FILE, "rb") as f:
-            bertrend = dill.load(f)
-        return bertrend
+        return PersistenceService.load_bertrend(models_path)
 
     @classmethod
     def save_topic_model(
