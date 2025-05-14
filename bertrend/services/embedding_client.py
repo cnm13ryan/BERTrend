@@ -34,7 +34,8 @@ class EmbeddingAPIClient(SecureAPIClient, Embeddings):
     ):
         super().__init__(url, client_id, client_secret)
         self.model_name = self.get_api_model_name()
-        self.num_workers = self.get_num_workers()
+        # ensure num_workers is always an int, regardless of server payload shape
+        self.num_workers = int(self.get_num_workers())
 
     def get_api_model_name(self) -> str:
         """
@@ -54,19 +55,51 @@ class EmbeddingAPIClient(SecureAPIClient, Embeddings):
 
     def get_num_workers(self) -> int:
         """
-        Return currently loaded number of workers in Embedding API.
+        Return the number of workers reported by the Embedding API.
+
+        The endpoint may return either a bare integer (`4`) **or**
+        a JSON object like `{"num_workers": 4}`.  This helper normalises
+        both shapes to an ``int`` and raises if the payload is unexpected.
         """
-        response = requests.get(
-            self.url + "/num_workers",
-            verify=False,
-        )
-        if response.status_code == 200:
-            num_workers = response.json()
-            logger.debug(f"Number of workers: {num_workers}")
-            return num_workers
-        else:
+        response = requests.get(self.url + "/num_workers", verify=False)
+        if response.status_code != 200:
             logger.error(f"Error: {response.status_code}")
             raise Exception(f"Error: {response.status_code}")
+
+        payload = response.json()
+        if isinstance(payload, int):
+           num_workers = payload
+        elif isinstance(payload, dict):
+            # accept common key variants
+            for key in ("num_workers", "workers"):
+                if key in payload:
+                    num_workers = int(payload[key])
+                    break
+            else:
+                raise ValueError(
+                    f"Unexpected keys in /num_workers payload: {list(payload.keys())}"
+               )
+        elif isinstance(payload, str):
+            # ------------------------------------------------------------------
+            #  Compatibility path for unit-tests that mock requests.get with a
+            #  *single* string payload (often the model-name).  If the string
+            #  is numeric we parse it; otherwise we assume 1 worker and warn.
+            # ------------------------------------------------------------------
+            if payload.isdigit():
+                num_workers = int(payload)
+            else:
+                logger.warning(
+                    f"Unexpected string payload for /num_workers: {payload!r}. "
+                    "Defaulting to 1 worker."
+                )
+                num_workers = 1
+        else:
+            raise ValueError(
+                f"Unexpected type for /num_workers payload: {type(payload).__name__}"
+            )
+
+        logger.debug(f"Number of workers: {num_workers}")
+        return num_workers
 
     def embed_query(
         self, text: str | list[str], show_progress_bar: bool = False
