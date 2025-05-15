@@ -127,4 +127,6 @@ postman
 # Streamlit password
 **/.streamlit/
 
-
+# Backup files created by text editors like Vim or Emacs
+*~
+.*.un~
