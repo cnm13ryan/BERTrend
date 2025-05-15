@@ -2,30 +2,36 @@
 #  See AUTHORS.txt
 #  SPDX-License-Identifier: MPL-2.0
 #  This file is part of BERTrend.
+
+# ----------  standard library  ----------
 import os
 import pickle
-
-import dill  # improvement to pickle
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+# ----------  third-party  ----------
+import dill  # more capable than pickle
 import numpy as np
 import pandas as pd
-from bertopic import BERTopic
-from loguru import logger
 from pandas import Timestamp
+from bertopic import BERTopic
+from bertopic._bertopic import BERTopic as _BERTopic
+from hdbscan import HDBSCAN
+from loguru import logger
 from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
+from umap import UMAP
 
+# ----------  local application  ----------
 from bertrend import (
     MODELS_DIR,
     BERTREND_DEFAULT_CONFIG_PATH,
     load_toml_config,
     SIGNAL_EVOLUTION_DATA_DIR,
 )
-
 from bertrend.BERTopicModel import BERTopicModel
 from bertrend.config.parameters import (
     DOC_INFO_DF_FILE,
@@ -46,6 +52,54 @@ from bertrend.trend_analysis.weak_signals import (
     _create_dataframes,
 )
 from bertrend.utils.data_loading import TEXT_COLUMN
+
+# -----------------------------------------------------------------------------
+#  Monkey‑patch BERTopic.reduce_outliers so it will *silently* skip the costly
+#  similarity step when there are no in‑liers (or no out‑liers) in the slice.
+#  This guards against the "Found array with 0 sample(s)" crash that occurred
+#  when every document had been labelled an outlier.
+# -----------------------------------------------------------------------------
+
+_original_reduce_outliers = _BERTopic.reduce_outliers  # keep a reference
+
+
+def _safe_reduce_outliers(
+    self, documents, topics, strategy="centroid", *args, **kwargs
+):
+    """
+    Drop-in replacement for BERTopic.reduce_outliers.
+
+    • If the HDBSCAN result contains _only_ outliers or _no_ outliers
+      we simply return the original *topics* array unchanged.
+
+    • Otherwise we delegate to the real implementation.
+    """
+    # Cast to ndarray to make the code robust to lists or scalars
+    topics_arr = np.asarray(topics)
+    n_outliers = (topics_arr == -1).sum()
+
+    # Skip expensive similarity step if there is nothing to re-assign
+    if n_outliers == 0 or n_outliers == topics_arr.size:
+        logger.debug(
+            "Skipping reduce_outliers – outliers=%d, docs=%d",
+            n_outliers,
+            topics_arr.size,
+        )
+        return topics
+
+    try:
+        # Forward the call exactly as BERTopic expects
+        return _original_reduce_outliers(
+            self, documents, topics, strategy=strategy, *args, **kwargs
+        )
+    except ValueError as err:
+        # Any unexpected edge-case inside the original method – keep the run alive
+        logger.warning("reduce_outliers failed (%s). Returning unchanged topics.", err)
+        return topics
+
+
+# Patch ☛ all future BERTopic instances
+_BERTopic.reduce_outliers = _safe_reduce_outliers
 
 
 class BERTrend:
@@ -188,12 +242,144 @@ class BERTrend:
         logger.debug(f"Processing period: {period}")
         logger.debug(f"Number of documents: {len(docs)}")
 
+        # ------------------------------------------------------------------
+        #  If this slice has fewer than two documents, BERTopic/UMAP cannot
+        #  run dimensionality reduction and will raise the ValueError you
+        #  just saw.  In that case we skip training but still return the
+        #  raw docs/embeddings so downstream code can decide what to do.
+        # ------------------------------------------------------------------
+        if len(docs) < 2:
+            logger.warning(
+                f"Period {period} has only {len(docs)} document – skipping topic "
+                "model training for this slice."
+            )
+            return None, docs, embeddings_subset
+
+        # logger.debug("Creating topic model...")
+        # topic_model = (
+        #     self.topic_model.fit(docs=docs, embeddings=embeddings_subset)
+        #     .topic_model
+        # )
+
+        # ------------------------------------------------------------- #
+        #  UMAP fails if n_neighbors ≥ len(docs).  Re-configure the
+        #  BERTopic instance on-the-fly for small slices.
+        #  UMAP spectral layout needs
+        #      n_components + 1  <  len(docs)
+        #      n_neighbors      <  len(docs)
+        #  We adapt both on-the-fly or, if impossible, skip the slice.
+        # ------------------------------------------------------------- #
+        slice_size = len(docs)
+
+        # absolute minimum to fit *anything* meaningful
+        MIN_DOCS = 3
+        if slice_size < MIN_DOCS:
+            logger.warning(
+                f"Period {period} has only {slice_size} document(s); "
+                "skipping topic model."
+            )
+            return None, docs, embeddings_subset
+
+        from umap import UMAP
+
+        params = self.topic_model.umap_model.get_params()
+
+        # adjust n_neighbors  (< slice_size)
+        k_nn = max(2, min(params["n_neighbors"], slice_size - 1))
+
+        # adjust n_components so that n_components + 1 < slice_size
+        k_nc = max(2, min(params["n_components"], slice_size - 2))
+
+        if (k_nn, k_nc) != (params["n_neighbors"], params["n_components"]):
+            logger.debug(
+                f"Adjusting UMAP for period {period}: "
+                f"n_neighbors {params['n_neighbors']}→{k_nn}, "
+                f"n_components {params['n_components']}→{k_nc}"
+            )
+            params["n_neighbors"] = k_nn
+            params["n_components"] = k_nc
+            self.topic_model.umap_model = UMAP(**params)
+
+        # ------------------------------------------------------------- #
+        #  Resize HDBSCAN when the slice is smaller than
+        #  * min_samples          or
+        #  * min_cluster_size
+        # ------------------------------------------------------------- #
+        from hdbscan import HDBSCAN
+
+        h_params = self.topic_model.hdbscan_model.get_params()
+
+        new_min_samples = min(max(1, h_params["min_samples"]), slice_size)
+        new_min_cluster = min(max(2, h_params["min_cluster_size"]), slice_size)
+
+        if (new_min_samples, new_min_cluster) != (
+            h_params["min_samples"],
+            h_params["min_cluster_size"],
+        ):
+            logger.debug(
+                f"Adjusting HDBSCAN for period {period}: "
+                f"min_samples {h_params['min_samples']}→{new_min_samples}, "
+                f"min_cluster_size {h_params['min_cluster_size']}→{new_min_cluster}"
+            )
+            h_params["min_samples"] = new_min_samples
+            h_params["min_cluster_size"] = new_min_cluster
+            self.topic_model.hdbscan_model = HDBSCAN(**h_params)
+
+        # ------------------------------------------------------------- #
+        #  Resize CountVectorizer for tiny slices
+        # ------------------------------------------------------------- #
+        from sklearn.feature_extraction.text import CountVectorizer
+
+        v: CountVectorizer = self.topic_model.vectorizer_model
+        v_params = v.get_params()
+
+        # max_df can be float (proportion) or int.  Convert to *absolute* docs.
+        if isinstance(v_params["max_df"], float):
+            max_df_abs = max(1, int(v_params["max_df"] * slice_size))
+        else:
+            max_df_abs = min(v_params["max_df"], slice_size)  # clamp to slice
+
+        min_df_abs = min(v_params["min_df"], slice_size)  # cannot exceed slice
+
+        # Ensure consistency: min_df ≤ max_df_abs
+        if min_df_abs > max_df_abs:
+            logger.debug(
+                f"Adjusting CountVectorizer for period {period}: "
+                f"min_df {v_params['min_df']}→{min_df_abs}, "
+                f"max_df {v_params['max_df']}→{max_df_abs}"
+            )
+            v_params["min_df"] = min_df_abs
+            # keep max_df proportional if it was a float, else use the absolute
+            v_params["max_df"] = (
+                max_df_abs / slice_size
+                if isinstance(v_params["max_df"], float)
+                else max_df_abs
+            )
+            self.topic_model.vectorizer_model = CountVectorizer(**v_params)
+
+        # ------------------------------------------------------------- #
+        #  FINAL SAFETY-NET                                             #
+        #  Guarantee min_df == 1 when the slice has fewer than         #
+        #  10 documents (heuristic) – this prevents the later          #
+        #  "max_df < min_df" crash when BERTopic builds one document   #
+        #  per topic (-1).                                             #
+        # ------------------------------------------------------------- #
+        if slice_size < 10:
+            from sklearn.feature_extraction.text import CountVectorizer
+
+            v_params = self.topic_model.vectorizer_model.get_params()
+            if v_params["min_df"] != 1:
+                logger.debug(
+                    f"Force-setting CountVectorizer.min_df → 1 for period "
+                    f"{period} (slice size = {slice_size})"
+                )
+                v_params["min_df"] = 1
+                self.topic_model.vectorizer_model = CountVectorizer(**v_params)
+
         logger.debug("Creating topic model...")
         topic_model = self.topic_model.fit(
-            docs=docs,
-            embeddings=embeddings_subset,
+            docs=docs, embeddings=embeddings_subset
         ).topic_model
-
         logger.debug("Topic model created successfully")
 
         doc_info_df = topic_model.get_document_info(docs=docs).rename(
@@ -293,17 +479,41 @@ class BERTrend:
                     period, group, embedding_model, embeddings
                 )  # TODO: parallelize?
 
+                # if self.last_topic_model is not None:
+                #     self.merge_models_with(new_topic_model, period)
+
+                # if save_topic_models:
+                #     logger.info(f"Saving topic model for period {period}...")
+                #     # save new model to disk for potential reuse
+                #     BERTrend.save_topic_model(
+                #         period, new_topic_model, bertrend_models_path
+                #     )
+
+                # # Update last topic model
+                # self.last_topic_model = new_topic_model
+                # self.last_topic_model_timestamp = period
+
+                # ------------------------------------------------------------------
+                #  Skip merge / save when _train_by_period returned None
+                #  (that happens for slices with < 2 documents).
+                # ------------------------------------------------------------------
+                # Skip this slice when _train_by_period returned None
+                if new_topic_model is None:
+                    logger.warning(
+                        f"Period {period} had < 2 docs – no topic model created."
+                    )
+                    continue
+
+                # A real model was produced – merge, persist, and mark as last
                 if self.last_topic_model is not None:
                     self.merge_models_with(new_topic_model, period)
 
                 if save_topic_models:
                     logger.info(f"Saving topic model for period {period}...")
-                    # save new model to disk for potential reuse
                     BERTrend.save_topic_model(
                         period, new_topic_model, bertrend_models_path
                     )
 
-                # Update last topic model
                 self.last_topic_model = new_topic_model
                 self.last_topic_model_timestamp = period
 

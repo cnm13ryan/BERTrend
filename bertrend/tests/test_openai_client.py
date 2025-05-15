@@ -9,7 +9,12 @@ from unittest.mock import patch, MagicMock
 from openai import OpenAI, AzureOpenAI, Stream
 from pydantic import BaseModel
 
-from bertrend.llm_utils.openai_client import OpenAI_Client
+from bertrend.llm_utils.openai_client import (
+    OpenAI_Client,
+    EndpointType,
+    OLLAMA_DEFAULT_PORT,
+    LM_STUDIO_DEFAULT_PORT,
+)
 
 
 @pytest.fixture
@@ -32,12 +37,103 @@ def test_initialization_with_azure(mock_azure_endpoint):
     """Test client initialization when using Azure endpoint"""
     client = OpenAI_Client(api_key="test_api_key", endpoint="https://azure.com")
     assert isinstance(client.llm_client, AzureOpenAI)
+    assert client.endpoint_type == EndpointType.AZURE
 
 
 def test_initialization_without_azure(mock_api_key):
     """Test client initialization when using OpenAI endpoint"""
     client = OpenAI_Client(api_key="test_api_key")
     assert isinstance(client.llm_client, OpenAI)
+    assert client.endpoint_type == EndpointType.OPENAI
+
+
+def test_initialization_with_ollama(mock_api_key):
+    """Test client initialization when using Ollama endpoint"""
+    client = OpenAI_Client(
+        api_key="test_key", endpoint=f"http://localhost:{OLLAMA_DEFAULT_PORT}"
+    )
+    assert isinstance(client.llm_client, OpenAI)
+    assert client.endpoint_type == EndpointType.OLLAMA
+
+
+def test_initialization_with_lm_studio(mock_api_key):
+    """Test client initialization when using LM Studio endpoint"""
+    client = OpenAI_Client(
+        api_key="test_key", endpoint=f"http://localhost:{LM_STUDIO_DEFAULT_PORT}"
+    )
+    assert isinstance(client.llm_client, OpenAI)
+    assert client.endpoint_type == EndpointType.LM_STUDIO
+
+
+def test_endpoint_type_detection():
+    """Test endpoint type detection for various URLs"""
+    client = OpenAI_Client(api_key="test_key")
+
+    # Test Azure detection
+    assert client._detect_endpoint_type("https://test.azure.com") == EndpointType.AZURE
+    assert client._detect_endpoint_type("http://azure.com") == EndpointType.AZURE
+
+    # Test Ollama detection
+    assert (
+        client._detect_endpoint_type(f"http://localhost:{OLLAMA_DEFAULT_PORT}")
+        == EndpointType.OLLAMA
+    )
+    assert (
+        client._detect_endpoint_type(f"http://127.0.0.1:{OLLAMA_DEFAULT_PORT}")
+        == EndpointType.OLLAMA
+    )
+
+    # Test LM Studio detection
+    assert (
+        client._detect_endpoint_type(f"http://localhost:{LM_STUDIO_DEFAULT_PORT}")
+        == EndpointType.LM_STUDIO
+    )
+    assert (
+        client._detect_endpoint_type(f"http://127.0.0.1:{LM_STUDIO_DEFAULT_PORT}")
+        == EndpointType.LM_STUDIO
+    )
+
+    # Test default OpenAI
+    assert client._detect_endpoint_type(None) == EndpointType.OPENAI
+
+    # Test other endpoints
+    assert (
+        client._detect_endpoint_type("http://custom-endpoint:8000")
+        == EndpointType.OTHER
+    )
+
+
+def test_local_endpoint_formatting():
+    """Test endpoint formatting for local deployments"""
+    client = OpenAI_Client(api_key="test_key")
+
+    # Test Ollama formatting
+    assert (
+        client._format_local_endpoint(None, EndpointType.OLLAMA)
+        == f"http://localhost:{OLLAMA_DEFAULT_PORT}"
+    )
+    assert (
+        client._format_local_endpoint("custom-host:11434", EndpointType.OLLAMA)
+        == "http://custom-host:11434"
+    )
+
+    # Test LM Studio formatting
+    assert (
+        client._format_local_endpoint(None, EndpointType.LM_STUDIO)
+        == f"http://localhost:{LM_STUDIO_DEFAULT_PORT}"
+    )
+    assert (
+        client._format_local_endpoint("custom-host:1234", EndpointType.LM_STUDIO)
+        == "http://custom-host:1234"
+    )
+
+    # Test https preservation
+    assert (
+        client._format_local_endpoint(
+            "https://custom-host:1234", EndpointType.LM_STUDIO
+        )
+        == "https://custom-host:1234"
+    )
 
 
 def test_generate_user_prompt(mock_api_key):

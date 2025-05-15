@@ -67,10 +67,23 @@ class EmbeddingService(BaseEmbedder):
             The client secret for authentication with the remote service.
         """
         super().__init__()
+
         self.local = local
+        self.model_name = model_name
+
         if not self.local:
-            self.url = url
-            self.secure_client = EmbeddingAPIClient(self.url, client_id, client_secret)
+            # Normalise URL
+            self.url = url.rstrip("/")
+            # Drop a single trailing “/v1” if present
+            self.url_root = (
+                self.url[:-3] if self.url.lower().endswith("/v1") else self.url
+            )
+
+            self.secure_client = EmbeddingAPIClient(
+                url=self.url_root,
+                model_name=self.model_name,
+                num_workers=4,
+            )
 
         self.embedding_model = None
         self.embedding_model_name = model_name

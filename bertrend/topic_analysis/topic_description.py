@@ -46,6 +46,11 @@ def generate_topic_description(
     language_code: str = "fr",
 ) -> TopicDescription | None:
     """Generates a LLM-based human-readable description of a topic composed of a title and a description (as a dict)"""
+    # ── Guard against a missing or invalid model ────────────────────────────────
+    if topic_model is None:
+        logger.error("generate_topic_description: topic_model is None")
+        return None
+
     topic_words = topic_model.get_topic(topic_number)
     if not topic_words:
         logger.warning(f"No words found for topic number {topic_number}")
@@ -58,8 +63,8 @@ def generate_topic_description(
     # Prepare the documents text
     docs_text = "\n\n".join(
         [
-            f"Document {i + 1}: {doc.text}..."
-            for i, doc in filtered_docs.head(3).iterrows()
+            f"Document {idx + 1}: {row['text']}..."
+            for idx, row in filtered_docs.head(3).iterrows()
         ]
     )
 

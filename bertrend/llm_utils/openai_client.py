@@ -4,7 +4,8 @@
 #  This file is part of BERTrend.
 
 import os
-from typing import Type
+from typing import Type, Literal
+from enum import Enum
 
 from openai import OpenAI, AzureOpenAI, Timeout, Stream
 from loguru import logger
@@ -18,19 +19,39 @@ DEFAULT_MAX_OUTPUT_TOKENS = 512
 
 AZURE_API_VERSION = "2025-03-01-preview"
 
+# Default ports for local LLM servers
+OLLAMA_DEFAULT_PORT = 11434
+LM_STUDIO_DEFAULT_PORT = 1234
+
+
+class EndpointType(str, Enum):
+    """Enum for different types of OpenAI-compatible endpoints"""
+
+    OPENAI = "openai"  # Official OpenAI API
+    AZURE = "azure"  # Azure OpenAI service
+    OLLAMA = "ollama"  # Ollama local deployment
+    LM_STUDIO = "lm_studio"  # LM Studio local deployment
+    OTHER = "other"  # Other OpenAI-compatible endpoints
+
 
 class OpenAI_Client:
     """
-    Generic client for OpenAI API (either direct API or via Azure).
+    Generic client for OpenAI-compatible APIs.
 
     This class provides a unified interface for interacting with OpenAI models,
-    supporting both direct API access and Azure-hosted deployments. It handles
-    authentication, request formatting, and error handling.
+    supporting:
+    - Official OpenAI API
+    - Azure OpenAI service
+    - Ollama local deployments
+    - LM Studio local deployments
+    - Other OpenAI-compatible endpoints
+
+    The class handles authentication, request formatting, and error handling.
 
     Notes
     -----
     The API key and the ENDPOINT must be set using environment variables OPENAI_API_KEY and
-    OPENAI_ENDPOINT respectively. The endpoint should only be set for Azure or local deployments.
+    OPENAI_ENDPOINT respectively. The endpoint should be set for any non-OpenAI deployment.
     """
 
     def __init__(
@@ -42,15 +63,17 @@ class OpenAI_Client:
         api_version: str = AZURE_API_VERSION,
     ):
         """
-        Initialize the OpenAI client.
+        Initialize the OpenAI-compatible client.
 
         Parameters
         ----------
         api_key : str, optional
-            OpenAI API key. If None, will try to get from OPENAI_API_KEY environment variable.
+            API key. If None, will try to get from OPENAI_API_KEY environment variable.
         endpoint : str, optional
             API endpoint URL. If None, will try to get from OPENAI_ENDPOINT environment variable.
-            Should be set for Azure or local deployments.
+            Should be set for Azure, Ollama, LM Studio or other local deployments.
+            For Ollama, use format: http://localhost:11434 or http://your-ollama-host:port
+            For LM Studio, use format: http://localhost:1234 or http://your-lmstudio-host:port
         model : str, optional
             Name of the model to use. If None, will try to get from OPENAI_DEFAULT_MODEL_NAME environment variable.
         temperature : float, default=DEFAULT_TEMPERATURE
@@ -75,34 +98,97 @@ class OpenAI_Client:
         if endpoint == "":  # check empty env var
             endpoint = None
 
-        run_on_azure = "azure.com" in endpoint if endpoint else False
+        # Detect endpoint type
+        endpoint_type = self._detect_endpoint_type(endpoint)
+        logger.debug(f"Detected endpoint type: {endpoint_type}")
 
+        # Set up common parameters for all client types
         common_params = {
             "api_key": api_key,
             "timeout": Timeout(TIMEOUT, connect=10.0),
             "max_retries": MAX_ATTEMPTS,
         }
-        openai_params = {
-            "base_url": endpoint,
-        }
-        azure_params = {
-            "azure_endpoint": endpoint,
-            "api_version": api_version or AZURE_API_VERSION,
-        }
 
-        if not run_on_azure:
-            self.llm_client = OpenAI(
-                **common_params,
-                **openai_params,
-            )
-        else:
+        # Configure client based on endpoint type
+        if endpoint_type == EndpointType.AZURE:
             self.llm_client = AzureOpenAI(
                 **common_params,
-                **azure_params,
+                azure_endpoint=endpoint,
+                api_version=api_version or AZURE_API_VERSION,
             )
+        else:
+            # For all other types (OpenAI, Ollama, LM Studio, Other), use the OpenAI client
+            # with appropriate base_url
+            if endpoint_type in [EndpointType.OLLAMA, EndpointType.LM_STUDIO]:
+                # For local deployments, ensure the endpoint has the correct format
+                endpoint = self._format_local_endpoint(endpoint, endpoint_type)
+
+            self.llm_client = OpenAI(
+                **common_params,
+                base_url=endpoint,
+            )
+
         self.model_name = model or os.getenv("OPENAI_DEFAULT_MODEL_NAME")
         self.temperature = temperature
         self.max_output_tokens = DEFAULT_MAX_OUTPUT_TOKENS
+        self.endpoint_type = endpoint_type
+
+    def _detect_endpoint_type(self, endpoint: str | None) -> EndpointType:
+        """
+        Detect the type of endpoint based on the URL.
+
+        Parameters
+        ----------
+        endpoint : str or None
+            The endpoint URL to analyze.
+
+        Returns
+        -------
+        EndpointType
+            The detected endpoint type.
+        """
+        if not endpoint:
+            return EndpointType.OPENAI
+
+        endpoint = endpoint.lower()
+        if "azure.com" in endpoint:
+            return EndpointType.AZURE
+        elif "localhost" in endpoint or "127.0.0.1" in endpoint:
+            if str(OLLAMA_DEFAULT_PORT) in endpoint:
+                return EndpointType.OLLAMA
+            elif str(LM_STUDIO_DEFAULT_PORT) in endpoint:
+                return EndpointType.LM_STUDIO
+        return EndpointType.OTHER
+
+    def _format_local_endpoint(
+        self, endpoint: str | None, endpoint_type: EndpointType
+    ) -> str:
+        """
+        Format the endpoint URL for local deployments.
+
+        Parameters
+        ----------
+        endpoint : str or None
+            The endpoint URL to format.
+        endpoint_type : EndpointType
+            The type of endpoint to format for.
+
+        Returns
+        -------
+        str
+            The formatted endpoint URL.
+        """
+        if not endpoint:
+            # Use default localhost URLs if no endpoint provided
+            if endpoint_type == EndpointType.OLLAMA:
+                return f"http://localhost:{OLLAMA_DEFAULT_PORT}"
+            elif endpoint_type == EndpointType.LM_STUDIO:
+                return f"http://localhost:{LM_STUDIO_DEFAULT_PORT}"
+
+        # Ensure the endpoint has the correct format
+        if not endpoint.startswith(("http://", "https://")):
+            endpoint = f"http://{endpoint}"
+        return endpoint
 
     def generate(
         self,

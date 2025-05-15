@@ -6,6 +6,7 @@ import os
 import time
 
 import requests
+from loguru import logger
 import urllib3
 from starlette import status
 
